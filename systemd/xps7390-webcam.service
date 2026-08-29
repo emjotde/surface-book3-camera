@@ -1,0 +1,12 @@
+[Unit]
+Description=Software ISP for the Dell XPS 13 7390 2-in-1 webcam
+Requires=xps7390-webcam-setup.service
+After=xps7390-webcam-setup.service
+
+[Service]
+ExecStart=/usr/local/bin/ipu4-softisp /dev/video-ipu4-raw /dev/video57
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target

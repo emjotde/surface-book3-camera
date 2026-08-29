@@ -1,0 +1,25 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: cachix/install-nix-action@v31
+      - name: Check scripts
+        run: nix shell nixpkgs#shellcheck -c shellcheck install.sh uninstall.sh scripts/*.sh
+      - name: Build modules and software ISP
+        run: nix flake check -L
+      - name: Reject proprietary and build files
+        run: |
+          if git ls-files | grep -Ei '\.(bin|cab|dll|sys|exe|ko|o)$'; then
+            echo "Do not commit binary driver, firmware, or build files."
+            exit 1
+          fi

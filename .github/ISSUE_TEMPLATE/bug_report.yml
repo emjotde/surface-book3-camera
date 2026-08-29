@@ -1,0 +1,38 @@
+name: Camera problem
+description: Report a build, capture, or image problem
+title: "[Bug]: "
+labels: [bug]
+body:
+  - type: checkboxes
+    attributes:
+      label: Hardware
+      options:
+        - label: I use a Dell XPS 13 7390 2-in-1.
+          required: true
+        - label: I did not attach proprietary firmware or Windows drivers.
+          required: true
+  - type: input
+    attributes:
+      label: Distribution
+      placeholder: NixOS, Ubuntu, Fedora, Arch Linux
+    validations:
+      required: true
+  - type: input
+    attributes:
+      label: Kernel
+      placeholder: Output of uname -r
+    validations:
+      required: true
+  - type: textarea
+    attributes:
+      label: Problem
+      description: State what you expected and what occurred.
+    validations:
+      required: true
+  - type: textarea
+    attributes:
+      label: Diagnostics
+      description: Paste reviewed output from scripts/diagnose.sh.
+      render: text
+    validations:
+      required: true

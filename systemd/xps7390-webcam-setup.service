@@ -1,0 +1,11 @@
+[Unit]
+Description=Configure the Dell XPS 13 7390 2-in-1 IPU4P camera
+After=systemd-udev-settle.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/libexec/xps7390-webcam-setup
+
+[Install]
+WantedBy=multi-user.target
