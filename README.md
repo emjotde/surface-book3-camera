@@ -15,6 +15,8 @@ Without this project, Linux usually shows no internal webcam device.
 - Automatic exposure and white balance are basic but functional.
 - Stream failure detection and automatic recovery are included.
 - Linux 6.18.x is the tested kernel series.
+- NixOS is the tested installation path.
+- The generic DKMS installer is new and needs testing on other distributions.
 
 This driver is experimental. It currently supports only the exact laptop model above.
 
