@@ -1,15 +1,7 @@
-# Ubuntu build definition
+# Build recipe
 
-`ubuntu.yml` preserves the Ubuntu 24.04 build recipe for the Surface driver,
-ISP and GStreamer adapter, script validation and artifact checks.
+`ubuntu.yml` builds the Surface components on Ubuntu 24.04 and checks scripts
+and artifact exclusions. GitHub Actions is inactive.
 
-It is intentionally outside `.github/workflows/`, so GitHub Actions is not
-enabled. The existing Copilot login can publish repository contents but lacks
-the additional `workflow` scope needed to create or update active workflows.
-The full original upstream history, including its former CI definition, is
-still preserved.
-
-The matching source snapshot has been built locally against the tested kernel,
-and scripts passed ShellCheck. This does not claim a GitHub-hosted CI run.
-To enable GitHub Actions later, authorize workflow access and move
-`ubuntu.yml` to `.github/workflows/ci.yml` in a separate commit.
+To enable it, authorize workflow access and move the file to
+`.github/workflows/ci.yml`. Local builds passed; no hosted CI run is claimed.

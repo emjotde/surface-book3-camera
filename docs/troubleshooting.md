@@ -1,65 +1,41 @@
 # Troubleshooting
 
-## No XPS Front Camera device
+## Camera missing or capture fails
 
-Run:
-
-```bash
-systemctl status xps7390-webcam-setup.service
-journalctl -b -u xps7390-webcam-setup.service
-ls -l /dev/video57 /dev/video-ipu4-raw
+```sh
+systemctl status surface-camera-front surface-camera-rear
+journalctl -b -u surface-camera-front -u surface-camera-rear
+ls -l /dev/video50 /dev/video51
+sudo dmesg | grep -Ei 'ipu4|ov5693|ov8865|firmware'
 ```
 
-Confirm that `v4l2loopback` is installed. Confirm that the firmware exists at:
+Check firmware at `/lib/firmware/intel/ipu/ipu4p_cpd.bin`, signed modules under
+`/usr/local/lib/surface-camera/$(uname -r)/`, and the installed WirePlumber rule.
+Choose a **Surface Book 3** camera, not a raw **Intel IPU4P ISYS Capture** node.
+Stopped bridges remove usable cameras from application lists.
 
-```text
-/lib/firmware/intel/ipu/ipu4p_cpd.bin
+## After a kernel update
+
+Build and sign matching modules; see [installation](surface-install.md).
+Never load modules for another kernel or disable Secure Boot to bypass errors.
+
+## Camera crash or switching failure
+
+Ubuntu Camera 46.2 needs the [compatibility patches](../patches/gnome-snapshot/README.md)
+and Cairo launcher. Close clients before restarting both bridges together.
+Independent physical-stream restart while the other camera runs is unreliable.
+
+## Camera stays on
+
+Close all capture clients and allow PipeWire's idle suspension to finish:
+
+```sh
+cat /sys/bus/i2c/drivers/ov5693/*/power/runtime_status
+cat /sys/bus/i2c/drivers/ov8865/*/power/runtime_status
 ```
 
-## Module does not load
+Both should read `suspended` when idle. For development or untested
+suspend/detach paths, stop both bridges explicitly.
 
-Check the kernel log:
-
-```bash
-sudo dmesg | grep -Ei 'ipu4|ov01a10|int346f|firmware'
-```
-
-This release supports Linux 6.18.x. Kernel interfaces can change between releases.
-Build failures on another kernel require a compatibility patch.
-
-Secure Boot rejects unsigned modules. Check it with:
-
-```bash
-mokutil --sb-state
-```
-
-## White or damaged image
-
-The software ISP detects the known padded-frame failure and restarts automatically.
-Check its restart count and log:
-
-```bash
-systemctl status xps7390-webcam.service
-journalctl -b -u xps7390-webcam.service
-```
-
-Restart the relay once:
-
-```bash
-sudo systemctl restart xps7390-webcam.service
-```
-
-Reboot if firmware stream teardown failed repeatedly.
-
-## Image is too dark or too bright
-
-The software ISP uses simple automatic exposure and gray-world white balance.
-It does not yet provide the image quality of a complete libcamera pipeline.
-Test in normal indoor light. Direct sunlight can saturate this small sensor.
-
-## Application cannot select the camera
-
-Select `XPS Front Camera`, not an `Intel IPU4P ISYS Capture` node.
-The application-facing device is `/dev/video57`.
-
-Close other camera applications. Some applications keep the video device open after hiding their window.
+Exposure and white balance are basic; use normal indoor lighting.
+Review logs before sharing them, and never attach private images or firmware.

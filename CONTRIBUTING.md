@@ -1,8 +1,8 @@
 # Contributing
 
-- Test changes on a Dell XPS 13 7390 2-in-1.
+- Test Surface changes on a Surface Book 3; identify the model for other ports.
 - State the exact kernel version in each report.
-- Run `scripts/diagnose.sh` and review its output before attachment.
+- Include relevant service/kernel logs; review them before attachment.
 - Keep all source files under their existing SPDX licenses.
 - Do not commit firmware, Windows drivers, crash dumps, or personal logs.
 - Keep kernel changes separate from software ISP changes when possible.

@@ -1,7 +1,7 @@
 # Security policy
 
-Report security problems privately through GitHub security advisories.
-Do not include proprietary firmware or Windows driver files in a report.
+Report security problems privately to the maintainers. Never attach private
+captures, signing keys, proprietary firmware or Windows drivers.
 
-This project loads external kernel modules and camera firmware.
-Use only the documented Dell firmware hash. Review changes before installation.
+This project loads external kernel modules. Review changes, verify the documented
+firmware hashes, and sign modules locally with your enrolled key.

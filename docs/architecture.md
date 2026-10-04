@@ -1,39 +1,28 @@
-# Architecture
-
-The camera stack has five parts.
-
-1. `int346f.ko` controls the INT346F power rails, clock, reset line, and privacy LED.
-2. `ov01a10-i346f.ko` controls the OV01A10 image sensor.
-3. `intel-ipu4p.ko` loads and authenticates the Intel IPU4P firmware.
-4. `intel-ipu4p-isys.ko` receives CSI-2 data and exposes packed RAW10 frames.
-5. `ipu4-softisp` converts RAW10 Bayer frames into YUYV frames for `v4l2loopback`.
-
-## Data path
+# Design
 
 ```text
-OV01A10 sensor
-  -> MIPI CSI-2
-  -> Intel IPU4P ISYS
-  -> 1280x800 packed RAW10
-  -> ipu4-softisp
-  -> 640x400 YUYV
-  -> v4l2loopback /dev/video57
-  -> browser or video-call application
+OV5693 / OV8865 (stock sensor drivers)
+  -> IPU4P controller + ISYS modules
+  -> packed RAW10
+  -> software ISP: upright YUYV, exposure and white balance
+  -> surfaceisp GStreamer source
+  -> Ubuntu v4l2-relayd
+  -> v4l2loopback /dev/video51 (front), /dev/video50 (rear)
+  -> PipeWire -> application
 ```
 
-## Hardware-specific settings
+The relay keeps virtual cameras visible with idle black frames. Loopback
+stream-usage events start the ISP child; the last stream close stops and reaps
+it. Noble's relay/module event ABI is `0x08000000`. No replacement loopback
+module is needed.
 
-The Dell firmware describes camera port 6. Firmware source 6 maps to receiver `s1p0`.
-The driver uses IPU4P receiver index 1 and MMIO base `0x6c000`.
+The discovery helper refreshes each virtual device after bridge start/stop.
+WirePlumber hides raw Bayer nodes from desktop applications.
 
-The receiver needs the Windows PHY table values for building block 8.
-It also needs port configuration `0x2e95` and a general-purpose reset pulse.
+The Surface front receiver reset must run **before firmware stream setup**.
+Its PHY path avoids Dell clock/reset writes, leaves BB8 untouched and configures
+BB10. Controller reprobe reuses surviving firmware nodes to avoid `-EEXIST`.
 
-The sensor uses continuous MIPI clock mode with register `0x4800 = 0x04`.
-The IPU6-derived iwake and LTR writes remain disabled because they stall IPU4P DMA.
-
-## Recovery
-
-Some failed CSI sessions return a valid prefix followed by `0xff` padding.
-The software ISP rejects these frames and restarts the capture stream.
-Firmware STOP or CLOSE failures cause an ISYS power cycle before the next stream.
+Raw formats are BGGR RAW10: front 2592x1944, stride 3264; rear 3264x2448,
+stride 4096. Resolve sensor subdevices by media entity name, not fixed numbers.
+Test-generator pixels and all-`0xff` failed buffers are not real camera capture.
