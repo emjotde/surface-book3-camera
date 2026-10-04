@@ -1,0 +1,13 @@
+[Unit]
+Description=Experimental Surface Book 3 rear camera relay
+After=systemd-udev-settle.service
+
+[Service]
+Type=simple
+ExecStart=/usr/local/libexec/surface-camera rear
+ExecStartPost=/usr/local/libexec/surface-camera-discovery 50 $MAINPID
+ExecStopPost=/usr/local/libexec/surface-camera-discovery 50
+KillSignal=SIGTERM
+
+[Install]
+WantedBy=multi-user.target

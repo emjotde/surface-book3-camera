@@ -9,17 +9,27 @@ permissions:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v5
-      - uses: cachix/install-nix-action@v31
+      - name: Install Ubuntu build dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y build-essential linux-headers-generic pkg-config \
+            libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev \
+            gstreamer1.0-tools shellcheck
       - name: Check scripts
-        run: nix shell nixpkgs#shellcheck -c shellcheck install.sh uninstall.sh scripts/*.sh
+        run: shellcheck install.sh uninstall.sh scripts/*.sh
       - name: Build modules and software ISP
-        run: nix flake check -L
+        run: |
+          headers=$(dpkg-query -W -f='${Depends}' linux-headers-generic | awk '{print $1}')
+          make -C driver/ipu4p KDIR="/usr/src/$headers"
+          make -C softisp CFLAGS="-O2 -Wall -Wextra -Werror" \
+            ipu4-softisp-surface-front ipu4-softisp-surface-rear libgstsurfaceisp.so
+          GST_PLUGIN_PATH="$PWD/softisp" gst-inspect-1.0 surfaceisp
       - name: Reject proprietary and build files
         run: |
-          if git ls-files | grep -Ei '\.(bin|cab|dll|sys|exe|ko|o)$'; then
-            echo "Do not commit binary driver, firmware, or build files."
+          if git ls-files | grep -Ei '\.(bin|cab|dll|sys|exe|ko|o|deb|ddeb|msi|raw|jpe?g|webm|key|pem|p12|pfx|der|csr)$'; then
+            echo "Do not commit firmware, build files, signing material, or private captures."
             exit 1
           fi

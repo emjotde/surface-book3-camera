@@ -1,13 +1,14 @@
 // SPDX-License-Identifier: GPL-2.0
 /*
- * Software ISP relay for the XPS 13 7390 2-in-1 front camera.
+ * Software ISP relay for the XPS 13 7390 and experimental Surface cameras.
  *
- * Reads SGRBG10P (packed RAW10 Bayer) 1280x800 frames from the IPU4P
+ * Reads SBGGR10P (packed RAW10 Bayer) frames from the IPU4P
  * capture node, produces 640x400 YUYV frames by 2x2 demosaic, applies
  * gray-world white balance and a simple auto-exposure loop (sensor
  * analogue gain), and writes the result to a v4l2loopback device.
  *
- * Usage: ipu4-softisp <raw-capture-dev> <loopback-dev>
+ * The Surface rear build handles 3264x2448 with a padded 4096-byte stride.
+ * Usage: ipu4-softisp <raw-capture-dev> <loopback-dev> [sensor-subdev]
  */
 #include <errno.h>
 #include <fcntl.h>
@@ -23,10 +24,17 @@
 #include <sys/stat.h>
 #include <unistd.h>
 #include <dirent.h>
+#include <signal.h>
 
+#ifndef IN_W
 #define IN_W 1280
+#endif
+#ifndef IN_H
 #define IN_H 800
+#endif
+#ifndef IN_STRIDE
 #define IN_STRIDE 1600		/* 1280 * 10 / 8 */
+#endif
 #define OUT_W (IN_W / 2)
 #define OUT_H (IN_H / 2)
 #define N_BUFS 4
@@ -34,10 +42,13 @@
 
 #define AE_TARGET 340.0		/* target mean luma, 10-bit scale */
 #define AE_TOL 0.15		/* relative dead zone */
-#define GAIN_MIN 256		/* sensor analogue gain range */
-#define GAIN_MAX 8192
-#define EXP_MIN 4		/* sensor exposure range, lines */
-#define EXP_MAX 888
+static volatile sig_atomic_t stopping;
+
+static void stop_handler(int signum)
+{
+	(void)signum;
+	stopping = 1;
+}
 
 static int xioctl(int fd, unsigned long req, void *arg)
 {
@@ -85,12 +96,16 @@ int main(int argc, char **argv)
 {
 	const char *in_name = argc > 1 ? argv[1] : "/dev/video-ipu4-raw";
 	const char *out_name = argc > 2 ? argv[2] : "/dev/video-ipu4";
+	int pipe_output = strcmp(out_name, "-") == 0;
 	static uint16_t bayer[IN_H][IN_W];
 	static uint8_t yuyv[OUT_H][OUT_W * 2];
-	struct buf bufs[N_BUFS];
+	struct buf bufs[N_BUFS] = { 0 };
+	unsigned int mapped_buffers = 0;
 	double wb_r = 1.0, wb_b = 1.0;
 	int in_fd, out_fd, sd_fd;
-	int gain = 1024, expo = EXP_MAX;
+	int gain_min, gain_max, gain_step, exp_min, exp_max;
+	int gain, expo;
+	int rotate = 0;
 	unsigned int bad_frames = 0;
 	unsigned int i;
 
@@ -99,15 +114,67 @@ int main(int argc, char **argv)
 		perror(in_name);
 		return 1;
 	}
-	out_fd = open(out_name, O_WRONLY);
+	out_fd = pipe_output ? STDOUT_FILENO : open(out_name, O_WRONLY);
 	if (out_fd < 0) {
 		perror(out_name);
 		return 1;
 	}
-	sd_fd = open_sensor_subdev();
-	if (sd_fd >= 0) {
-		set_ctrl(sd_fd, V4L2_CID_ANALOGUE_GAIN, gain);
-		set_ctrl(sd_fd, V4L2_CID_EXPOSURE, expo);
+	if (!pipe_output) {
+		struct v4l2_capability caps = { 0 };
+		unsigned int capabilities;
+
+		if (xioctl(out_fd, VIDIOC_QUERYCAP, &caps) < 0) {
+			perror("output QUERYCAP");
+			return 1;
+		}
+		capabilities = caps.capabilities & V4L2_CAP_DEVICE_CAPS ?
+			caps.device_caps : caps.capabilities;
+		if (!(capabilities & V4L2_CAP_VIDEO_OUTPUT)) {
+			fprintf(stderr, "Virtual camera is not available for output\n");
+			return 1;
+		}
+	}
+	signal(SIGINT, stop_handler);
+	signal(SIGTERM, stop_handler);
+	if (pipe_output)
+		signal(SIGPIPE, SIG_IGN);
+	sd_fd = argc > 3 ? open(argv[3], O_RDWR) : open_sensor_subdev();
+	if (sd_fd < 0) {
+		fprintf(stderr, "Cannot open camera sensor controls\n");
+		return 1;
+	}
+	{
+		struct v4l2_queryctrl g = { .id = V4L2_CID_ANALOGUE_GAIN };
+		struct v4l2_queryctrl e = { .id = V4L2_CID_EXPOSURE };
+		struct v4l2_control rotation = { .id = V4L2_CID_CAMERA_SENSOR_ROTATION };
+
+		if (xioctl(sd_fd, VIDIOC_QUERYCTRL, &g) < 0 ||
+		    xioctl(sd_fd, VIDIOC_QUERYCTRL, &e) < 0) {
+			perror("sensor control ranges");
+			return 1;
+		}
+		gain_min = g.minimum;
+		gain_max = g.maximum;
+		gain_step = g.step;
+		exp_min = e.minimum;
+		exp_max = e.maximum;
+		if (gain_min <= 0 || gain_step <= 0 || exp_min <= 0) {
+			fprintf(stderr, "Unsupported sensor control ranges\n");
+			return 1;
+		}
+		gain = gain_min;
+		expo = exp_max;
+		if (set_ctrl(sd_fd, V4L2_CID_ANALOGUE_GAIN, gain) < 0 ||
+		    set_ctrl(sd_fd, V4L2_CID_EXPOSURE, expo) < 0) {
+			perror("initial sensor exposure");
+			return 1;
+		}
+		if (xioctl(sd_fd, VIDIOC_G_CTRL, &rotation) == 0)
+			rotate = rotation.value == 180;
+		else if (errno != EINVAL) {
+			perror("sensor rotation");
+			return 1;
+		}
 	}
 
 	/* input format */
@@ -124,10 +191,16 @@ int main(int argc, char **argv)
 			perror("input S_FMT");
 			return 1;
 		}
+		if (f.fmt.pix.width != IN_W || f.fmt.pix.height != IN_H ||
+		    f.fmt.pix.bytesperline != IN_STRIDE ||
+		    f.fmt.pix.pixelformat != v4l2_fourcc('p', 'B', 'A', 'A')) {
+			fprintf(stderr, "Unexpected RAW10 input geometry or format\n");
+			return 1;
+		}
 	}
 
 	/* output format on the loopback device */
-	{
+	if (!pipe_output) {
 		struct v4l2_format f = {
 			.type = V4L2_BUF_TYPE_VIDEO_OUTPUT,
 		};
@@ -142,6 +215,19 @@ int main(int argc, char **argv)
 			perror("output S_FMT");
 			return 1;
 		}
+		if (xioctl(out_fd, VIDIOC_G_FMT, &f) < 0) {
+			perror("output G_FMT");
+			return 1;
+		}
+		if (f.fmt.pix.width != OUT_W || f.fmt.pix.height != OUT_H ||
+		    f.fmt.pix.pixelformat != V4L2_PIX_FMT_YUYV ||
+		    f.fmt.pix.bytesperline != OUT_W * 2 ||
+		    f.fmt.pix.sizeimage != sizeof(yuyv)) {
+			fprintf(stderr, "Unexpected virtual camera format: %ux%u stride %u size %u\n",
+				f.fmt.pix.width, f.fmt.pix.height,
+				f.fmt.pix.bytesperline, f.fmt.pix.sizeimage);
+			return 1;
+		}
 	}
 
 	/* request and map input buffers */
@@ -154,6 +240,10 @@ int main(int argc, char **argv)
 
 		if (xioctl(in_fd, VIDIOC_REQBUFS, &rb) < 0) {
 			perror("REQBUFS");
+			return 1;
+		}
+		if (!rb.count || rb.count > N_BUFS) {
+			fprintf(stderr, "Unexpected capture buffer count: %u\n", rb.count);
 			return 1;
 		}
 		for (i = 0; i < rb.count; i++) {
@@ -179,6 +269,7 @@ int main(int argc, char **argv)
 				perror("QBUF");
 				return 1;
 			}
+			mapped_buffers++;
 		}
 	}
 
@@ -190,11 +281,20 @@ int main(int argc, char **argv)
 			return 1;
 		}
 	}
+	if (!pipe_output) {
+		int type = V4L2_BUF_TYPE_VIDEO_OUTPUT;
+
+		/* Mark this descriptor as a writer so loopback restores caps on close. */
+		if (xioctl(out_fd, VIDIOC_STREAMON, &type) < 0) {
+			perror("output STREAMON");
+			return 1;
+		}
+	}
 
 	fprintf(stderr, "ipu4-softisp: %s -> %s, %dx%d YUYV\n",
 		in_name, out_name, OUT_W, OUT_H);
 
-	for (unsigned long frame = 0;; frame++) {
+	for (unsigned long frame = 0; !stopping; frame++) {
 		struct v4l2_buffer b = {
 			.type = V4L2_BUF_TYPE_VIDEO_CAPTURE,
 			.memory = V4L2_MEMORY_MMAP,
@@ -205,12 +305,26 @@ int main(int argc, char **argv)
 		double wb_sum_r = 0, wb_sum_g = 0, wb_sum_b = 0;
 		unsigned int x, y;
 
-		if (poll(&pfd, 1, 2000) <= 0) {
-			fprintf(stderr, "ipu4-softisp: poll timeout\n");
+		int poll_result = poll(&pfd, 1, 2000);
+		if (poll_result < 0 && errno == EINTR) {
+			if (stopping)
+				break;
+			continue;
+		}
+		if (poll_result <= 0 || pfd.revents & (POLLERR | POLLHUP | POLLNVAL)) {
+			fprintf(stderr, "ipu4-softisp: capture poll failed (%d, events %#x)\n",
+				poll_result, pfd.revents);
 			return 1;
 		}
 		if (xioctl(in_fd, VIDIOC_DQBUF, &b) < 0) {
 			perror("DQBUF");
+			return 1;
+		}
+		if (b.index >= mapped_buffers ||
+		    b.bytesused < (size_t)IN_STRIDE * IN_H ||
+		    bufs[b.index].length < (size_t)IN_STRIDE * IN_H ||
+		    b.flags & V4L2_BUF_FLAG_ERROR) {
+			fprintf(stderr, "ipu4-softisp: invalid capture buffer\n");
 			return 1;
 		}
 		raw = bufs[b.index].start;
@@ -238,7 +352,7 @@ int main(int argc, char **argv)
 				}
 				if (bad_frames >= BAD_FRAME_LIMIT) {
 					fprintf(stderr,
-						"ipu4-softisp: invalid padded frames; restarting stream\n");
+						"ipu4-softisp: invalid padded frames; stopping relay\n");
 					return 1;
 				}
 				continue;
@@ -268,7 +382,7 @@ int main(int argc, char **argv)
 		for (y = 0; y < OUT_H; y++) {
 			const uint16_t *e = bayer[2 * y];
 			const uint16_t *o = bayer[2 * y + 1];
-			uint8_t *dst = yuyv[y];
+			uint8_t *dst = yuyv[rotate ? OUT_H - 1 - y : y];
 
 			for (x = 0; x < OUT_W; x += 2) {
 				double r0, g0, b0, r1, g1, b1;
@@ -309,10 +423,11 @@ int main(int argc, char **argv)
 				if (u < 16) u = 16; else if (u > 240) u = 240;
 				if (v < 16) v = 16; else if (v > 240) v = 240;
 
-				dst[2 * x + 0] = (uint8_t)yy0;
-				dst[2 * x + 1] = (uint8_t)u;
-				dst[2 * x + 2] = (uint8_t)yy1;
-				dst[2 * x + 3] = (uint8_t)v;
+				unsigned int pos = 2 * (rotate ? OUT_W - 2 - x : x);
+				dst[pos + 0] = (uint8_t)(rotate ? yy1 : yy0);
+				dst[pos + 1] = (uint8_t)u;
+				dst[pos + 2] = (uint8_t)(rotate ? yy0 : yy1);
+				dst[pos + 3] = (uint8_t)v;
 			}
 		}
 
@@ -321,10 +436,30 @@ int main(int argc, char **argv)
 			return 1;
 		}
 
-		if (write(out_fd, yuyv, sizeof(yuyv)) < 0) {
-			perror("loopback write");
-			return 1;
+		size_t offset = 0;
+
+		while (offset < sizeof(yuyv) && !stopping) {
+			ssize_t written = write(out_fd, (uint8_t *)yuyv + offset,
+						sizeof(yuyv) - offset);
+
+			if (written < 0) {
+				if (errno == EINTR)
+					continue;
+				if (stopping && pipe_output && errno == EPIPE)
+					break;
+				perror("ISP output write");
+				return 1;
+			}
+			if (!written ||
+			    (!pipe_output && (size_t)written != sizeof(yuyv))) {
+				fprintf(stderr, "ipu4-softisp: short output write (%zd)\n",
+					written);
+				return 1;
+			}
+			offset += written;
 		}
+		if (stopping)
+			break;
 
 		/* gray-world white balance on unclipped pixels, smoothed */
 		if (wb_sum_r > 1000 && wb_sum_b > 1000) {
@@ -363,18 +498,19 @@ int main(int argc, char **argv)
 				int ne, ng;
 
 				/* prefer low gain */
-				ne = (int)(want / GAIN_MIN);
-				ng = GAIN_MIN;
-				if (ne > EXP_MAX) {
-					ng = (int)(want / EXP_MAX);
-					ne = EXP_MAX;
+				ne = (int)(want / gain_min);
+				ng = gain_min;
+				if (ne > exp_max) {
+					ng = (int)(want / exp_max);
+					ne = exp_max;
 				}
-				if (ne < EXP_MIN)
-					ne = EXP_MIN;
-				if (ng < GAIN_MIN)
-					ng = GAIN_MIN;
-				if (ng > GAIN_MAX)
-					ng = GAIN_MAX;
+				if (ne < exp_min)
+					ne = exp_min;
+				if (ng < gain_min)
+					ng = gain_min;
+				if (ng > gain_max)
+					ng = gain_max;
+				ng = gain_min + (ng - gain_min) / gain_step * gain_step;
 				if (ne != expo) {
 					expo = ne;
 					if (set_ctrl(sd_fd, V4L2_CID_EXPOSURE,
@@ -395,4 +531,26 @@ int main(int argc, char **argv)
 			}
 		}
 	}
+	{
+		int type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
+
+		if (xioctl(in_fd, VIDIOC_STREAMOFF, &type) < 0) {
+			perror("STREAMOFF");
+			return 1;
+		}
+		if (!pipe_output) {
+			type = V4L2_BUF_TYPE_VIDEO_OUTPUT;
+			if (xioctl(out_fd, VIDIOC_STREAMOFF, &type) < 0) {
+				perror("output STREAMOFF");
+				return 1;
+			}
+		}
+	}
+	for (i = 0; i < mapped_buffers; i++)
+		if (bufs[i].start && bufs[i].start != MAP_FAILED)
+			munmap(bufs[i].start, bufs[i].length);
+	close(sd_fd);
+	close(out_fd);
+	close(in_fd);
+	return 0;
 }

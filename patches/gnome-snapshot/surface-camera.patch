@@ -1,0 +1,90 @@
+--- a/aperture/src/camera.rs
++++ b/aperture/src/camera.rs
+@@ -142,16 +142,9 @@
+ 
+     pub(crate) fn source_element(
+         &self,
+-        previous: Option<&gst::Element>,
+-    ) -> Result<Option<(gst::Element, gst::Element)>, glib::BoolError> {
+-        let device = self.device();
+-        let Some(previous) = previous else {
+-            return create_element(&device);
+-        };
+-        match device.reconfigure_element(previous) {
+-            Ok(_) => Ok(None),
+-            Err(_) => create_element(&device),
+-        }
++    ) -> Result<(gst::Element, gst::Element), glib::BoolError> {
++        // Retargeting the source leaves the previous camera's capsfilter in place.
++        create_element(&self.device())
+     }
+ }
+ 
+@@ -201,13 +194,16 @@
+ 
+ fn create_element(
+     device: &gst::Device,
+-) -> Result<Option<(gst::Element, gst::Element)>, glib::BoolError> {
++) -> Result<(gst::Element, gst::Element), glib::BoolError> {
+     use gst::prelude::*;
+ 
+     let bin = gst::Bin::new();
+ 
+     let device_src = device.create_element(None)?;
+     device_src.set_property("client-name", crate::APP_ID.get().unwrap());
++    if device_src.has_property("always-copy", Some(bool::static_type())) {
++        device_src.set_property("always-copy", true);
++    }
+ 
+     let caps = caps(device);
+     log::debug!("Found caps: {caps}");
+@@ -243,5 +239,5 @@
+         .build()
+         .expect("Missing GStreamer Bad Plug-ins");
+ 
+-    Ok(Some((wrapper, device_src)))
++    Ok((wrapper, device_src))
+ }
+--- a/aperture/src/viewfinder.rs
++++ b/aperture/src/viewfinder.rs
+@@ -138,18 +138,11 @@
+             }
+ 
+             if let Some(camera) = camera {
+-                // `camera_src` might be `None`, which means the element was
+-                // reconfigured and we should keep using it
+-
+-                // TODO This is incredibly not idiomatic.
+-                let guard = self.camera_src.borrow();
+-                match camera.source_element(guard.as_ref()) {
+-                    Ok(Some((bin, camera_src))) => {
+-                        drop(guard);
++                match camera.source_element() {
++                    Ok((bin, camera_src)) => {
+                         self.camerabin().set_property("camera-source", &bin);
+                         self.camera_src.replace(Some(camera_src));
+                     }
+-                    Ok(None) => (),
+                     Err(err) => {
+                         log::error!("Could not get source element: {err}");
+                         self.set_state(ViewfinderState::Error);
+--- a/debian/changelog
++++ b/debian/changelog
+@@ -1,3 +1,17 @@
++gnome-snapshot (46.2-1ubuntu2+surface2) noble; urgency=medium
++
++  * Rebuild the per-camera source and format filter when switching between
++    cameras with different native resolutions.
++
++ -- Local administrator <root@localhost>  Sat, 03 Oct 2026 19:14:00 -0700
++
++gnome-snapshot (46.2-1ubuntu2+surface1) noble; urgency=medium
++
++  * Copy PipeWire source buffers to avoid the Camera preview frame-copy crash
++    with v4l2loopback (LP: #2076315).
++
++ -- Local administrator <root@localhost>  Sat, 03 Oct 2026 18:12:53 -0700
++
+ gnome-snapshot (46.2-1ubuntu2) noble; urgency=medium
+ 
+   * Updates to salsa-ci configuration
