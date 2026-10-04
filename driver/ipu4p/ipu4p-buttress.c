@@ -505,7 +505,7 @@ bool ipu4p_buttress_auth_done(struct ipu4p_device *isp)
 
 	return val == BUTTRESS_SECURITY_CTL_AUTH_DONE;
 }
-EXPORT_SYMBOL_NS_GPL(ipu4p_buttress_auth_done, "INTEL_IPU4P");
+EXPORT_SYMBOL_NS_GPL(ipu4p_buttress_auth_done, INTEL_IPU4P);
 
 int ipu4p_buttress_reset_authentication(struct ipu4p_device *isp)
 {
@@ -597,7 +597,7 @@ out:
 
 	return ret;
 }
-EXPORT_SYMBOL_NS_GPL(ipu4p_buttress_map_fw_image, "INTEL_IPU4P");
+EXPORT_SYMBOL_NS_GPL(ipu4p_buttress_map_fw_image, INTEL_IPU4P);
 
 void ipu4p_buttress_unmap_fw_image(struct ipu4p_bus_device *sys,
 				  struct sg_table *sgt)
@@ -608,7 +608,7 @@ void ipu4p_buttress_unmap_fw_image(struct ipu4p_bus_device *sys,
 	dma_unmap_sgtable(&pdev->dev, sgt, DMA_TO_DEVICE, 0);
 	sg_free_table(sgt);
 }
-EXPORT_SYMBOL_NS_GPL(ipu4p_buttress_unmap_fw_image, "INTEL_IPU4P");
+EXPORT_SYMBOL_NS_GPL(ipu4p_buttress_unmap_fw_image, INTEL_IPU4P);
 
 int ipu4p_buttress_authenticate(struct ipu4p_device *isp)
 {
@@ -773,7 +773,7 @@ int ipu4p_buttress_start_tsc_sync(struct ipu4p_device *isp)
 
 	return -ETIMEDOUT;
 }
-EXPORT_SYMBOL_NS_GPL(ipu4p_buttress_start_tsc_sync, "INTEL_IPU4P");
+EXPORT_SYMBOL_NS_GPL(ipu4p_buttress_start_tsc_sync, INTEL_IPU4P);
 
 void ipu4p_buttress_tsc_read(struct ipu4p_device *isp, u64 *val)
 {
@@ -795,7 +795,7 @@ void ipu4p_buttress_tsc_read(struct ipu4p_device *isp, u64 *val)
 	}
 	local_irq_restore(flags);
 }
-EXPORT_SYMBOL_NS_GPL(ipu4p_buttress_tsc_read, "INTEL_IPU4P");
+EXPORT_SYMBOL_NS_GPL(ipu4p_buttress_tsc_read, INTEL_IPU4P);
 
 u64 ipu4p_buttress_tsc_ticks_to_ns(u64 ticks, const struct ipu4p_device *isp)
 {
@@ -810,7 +810,7 @@ u64 ipu4p_buttress_tsc_ticks_to_ns(u64 ticks, const struct ipu4p_device *isp)
 	 */
 	return div_u64(ns, isp->buttress.ref_clk);
 }
-EXPORT_SYMBOL_NS_GPL(ipu4p_buttress_tsc_ticks_to_ns, "INTEL_IPU4P");
+EXPORT_SYMBOL_NS_GPL(ipu4p_buttress_tsc_ticks_to_ns, INTEL_IPU4P);
 
 void ipu4p_buttress_restore(struct ipu4p_device *isp)
 {

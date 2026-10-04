@@ -16,7 +16,7 @@ struct ipu4p_isys_video;
 struct ipu4p_isys;
 struct ipu4p_isys_stream;
 
-#define NR_OF_CSI2_VC		16
+#define NR_OF_CSI2_VC		4
 #define INVALID_VC_ID		-1
 #define NR_OF_CSI2_SINK_PADS	1
 #define CSI2_PAD_SINK		0
@@ -70,6 +70,7 @@ void ipu4p_isys_csi2_sof_event_by_stream(struct ipu4p_isys_stream *stream);
 void ipu4p_isys_csi2_eof_event_by_stream(struct ipu4p_isys_stream *stream);
 void ipu4p_isys_register_errors(struct ipu4p_isys_csi2 *csi2);
 void ipu4p_isys_csi2_error(struct ipu4p_isys_csi2 *csi2);
+void ipu4p_isys_csi2_prepare_front(struct ipu4p_isys_csi2 *csi2);
 int ipu4p_isys_csi2_get_remote_desc(u32 source_stream,
 				   struct ipu4p_isys_csi2 *csi2,
 				   struct media_entity *source_entity,

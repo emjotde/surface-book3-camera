@@ -85,6 +85,7 @@ const struct ipu4p_isys_pixelformat ipu4p_isys_pfmts[] = {
 	  IPU4P_FW_ISYS_FRAME_FORMAT_RGB565 },
 	{ V4L2_PIX_FMT_BGR24, 24, 24, MEDIA_BUS_FMT_RGB888_1X24,
 	  IPU4P_FW_ISYS_FRAME_FORMAT_RGBA888 },
+#ifdef V4L2_META_FMT_GENERIC_8
 	{ V4L2_META_FMT_GENERIC_8, 8, 8, MEDIA_BUS_FMT_META_8,
 	  IPU4P_FW_ISYS_FRAME_FORMAT_RAW8, true },
 	{ V4L2_META_FMT_GENERIC_CSI2_10, 10, 10, MEDIA_BUS_FMT_META_10,
@@ -93,6 +94,7 @@ const struct ipu4p_isys_pixelformat ipu4p_isys_pfmts[] = {
 	  IPU4P_FW_ISYS_FRAME_FORMAT_RAW12, true },
 	{ V4L2_META_FMT_GENERIC_CSI2_16, 16, 16, MEDIA_BUS_FMT_META_16,
 	  IPU4P_FW_ISYS_FRAME_FORMAT_RAW16, true },
+#endif
 };
 
 static int video_open(struct file *file)
@@ -287,12 +289,16 @@ static int ipu4p_isys_vidioc_try_fmt_vid_cap(struct file *file, void *fh,
 static int __ipu4p_isys_vidioc_try_fmt_meta_cap(struct ipu4p_isys_video *av,
 					       struct v4l2_format *f)
 {
+#ifdef V4L2_META_FMT_GENERIC_8
 	ipu4p_isys_try_fmt_cap(av, f->type, &f->fmt.meta.dataformat,
 			      &f->fmt.meta.width, &f->fmt.meta.height,
 			      &f->fmt.meta.bytesperline,
 			      &f->fmt.meta.buffersize);
 
 	return 0;
+#else
+	return -EINVAL;
+#endif
 }
 
 static int ipu4p_isys_vidioc_try_fmt_meta_cap(struct file *file, void *fh,
@@ -300,9 +306,7 @@ static int ipu4p_isys_vidioc_try_fmt_meta_cap(struct file *file, void *fh,
 {
 	struct ipu4p_isys_video *av = video_drvdata(file);
 
-	__ipu4p_isys_vidioc_try_fmt_meta_cap(av, f);
-
-	return 0;
+	return __ipu4p_isys_vidioc_try_fmt_meta_cap(av, f);
 }
 
 static int ipu4p_isys_vidioc_s_fmt_vid_cap(struct file *file, void *fh,
@@ -320,11 +324,15 @@ static int ipu4p_isys_vidioc_s_fmt_meta_cap(struct file *file, void *fh,
 					   struct v4l2_format *f)
 {
 	struct ipu4p_isys_video *av = video_drvdata(file);
+	int ret;
 
 	if (vb2_is_busy(&av->aq.vbq))
 		return -EBUSY;
 
-	ipu4p_isys_vidioc_try_fmt_meta_cap(file, fh, f);
+	ret = ipu4p_isys_vidioc_try_fmt_meta_cap(file, fh, f);
+
+	if (ret)
+		return ret;
 	av->meta_fmt = f->fmt.meta;
 
 	return 0;
@@ -522,6 +530,8 @@ static int start_stream_firmware(struct ipu4p_isys_video *av,
 	struct ipu4p_isys_queue *aq;
 	int ret, retout, tout;
 	u16 send_type;
+
+	ipu4p_isys_csi2_prepare_front(ipu4p_isys_subdev_to_csi2(stream->asd));
 
 	msg = ipu4p_get_fw_msg_buf(stream);
 	if (!msg)
@@ -1288,6 +1298,7 @@ int ipu4p_isys_video_init(struct ipu4p_isys_video *av)
 			.height = 1080,
 		},
 	};
+#ifdef V4L2_META_FMT_GENERIC_8
 	struct v4l2_format format_meta = {
 		.type = V4L2_BUF_TYPE_META_CAPTURE,
 		.fmt.meta = {
@@ -1295,11 +1306,15 @@ int ipu4p_isys_video_init(struct ipu4p_isys_video *av)
 			.height = 4,
 		},
 	};
+#endif
 	int ret;
 
 	mutex_init(&av->mutex);
 	av->vdev.device_caps = V4L2_CAP_STREAMING | V4L2_CAP_IO_MC |
-			       V4L2_CAP_VIDEO_CAPTURE | V4L2_CAP_META_CAPTURE;
+			       V4L2_CAP_VIDEO_CAPTURE;
+#ifdef V4L2_META_FMT_GENERIC_8
+	av->vdev.device_caps |= V4L2_CAP_META_CAPTURE;
+#endif
 	av->vdev.vfl_dir = VFL_DIR_RX;
 
 	ret = ipu4p_isys_queue_init(&av->aq);
@@ -1323,8 +1338,10 @@ int ipu4p_isys_video_init(struct ipu4p_isys_video *av)
 
 	__ipu4p_isys_vidioc_try_fmt_vid_cap(av, &format);
 	av->pix_fmt = format.fmt.pix;
+#ifdef V4L2_META_FMT_GENERIC_8
 	__ipu4p_isys_vidioc_try_fmt_meta_cap(av, &format_meta);
 	av->meta_fmt = format_meta.fmt.meta;
+#endif
 
 	video_set_drvdata(&av->vdev, av);
 
@@ -1381,8 +1398,10 @@ u32 ipu4p_isys_get_bytes_per_line(struct ipu4p_isys_video *av)
 	if (av->aq.vbq.type == V4L2_BUF_TYPE_VIDEO_CAPTURE)
 		return av->pix_fmt.bytesperline;
 
+#ifdef V4L2_META_FMT_GENERIC_8
 	if (av->aq.vbq.type == V4L2_BUF_TYPE_META_CAPTURE)
 		return av->meta_fmt.bytesperline;
+#endif
 
 	return 0;
 }
@@ -1392,8 +1411,10 @@ u32 ipu4p_isys_get_frame_width(struct ipu4p_isys_video *av)
 	if (av->aq.vbq.type == V4L2_BUF_TYPE_VIDEO_CAPTURE)
 		return av->pix_fmt.width;
 
+#ifdef V4L2_META_FMT_GENERIC_8
 	if (av->aq.vbq.type == V4L2_BUF_TYPE_META_CAPTURE)
 		return av->meta_fmt.width;
+#endif
 
 	return 0;
 }
@@ -1403,8 +1424,10 @@ u32 ipu4p_isys_get_frame_height(struct ipu4p_isys_video *av)
 	if (av->aq.vbq.type == V4L2_BUF_TYPE_VIDEO_CAPTURE)
 		return av->pix_fmt.height;
 
+#ifdef V4L2_META_FMT_GENERIC_8
 	if (av->aq.vbq.type == V4L2_BUF_TYPE_META_CAPTURE)
 		return av->meta_fmt.height;
+#endif
 
 	return 0;
 }

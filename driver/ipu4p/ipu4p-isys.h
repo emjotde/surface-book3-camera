@@ -140,6 +140,7 @@ struct ipu4p_isys {
 	void *fwcom;
 	u32 phy_termcal_val;
 	bool need_reset;
+	bool surface_phy;
 	bool icache_prefetch;
 	bool csi2_cse_ipc_not_supported;
 	unsigned int ref_count;
@@ -183,6 +184,7 @@ void ipu4p_cleanup_fw_msg_bufs(struct ipu4p_isys *isys);
 extern const struct v4l2_ioctl_ops ipu4p_isys_ioctl_ops;
 
 void isys_setup_hw(struct ipu4p_isys *isys);
+void ipu4p_isys_reapply_front_phy(struct ipu4p_isys *isys);
 irqreturn_t isys_isr(struct ipu4p_bus_device *adev);
 void update_watermark_setting(struct ipu4p_isys *isys);
 

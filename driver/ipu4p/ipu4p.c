@@ -315,7 +315,7 @@ void ipu4p_configure_spc(struct ipu4p_device *isp,
 		ipu4p_pkg_dir_configure_spc(isp, hw_variant, pkg_dir_idx, base,
 					   pkg_dir, pkg_dir_dma_addr);
 }
-EXPORT_SYMBOL_NS_GPL(ipu4p_configure_spc, "INTEL_IPU4P");
+EXPORT_SYMBOL_NS_GPL(ipu4p_configure_spc, INTEL_IPU4P);
 
 #define IPU4P_ISYS_CSI2_NPORTS		4
 #define IPU4PSE_ISYS_CSI2_NPORTS		4
@@ -362,12 +362,19 @@ ipu4p_isys_init(struct pci_dev *pdev, struct device *parent,
 	struct device *dev = &pdev->dev;
 	struct ipu4p_bus_device *isys_adev;
 	struct ipu4p_isys_pdata *pdata;
+	struct fwnode_handle *endpoint;
 	int ret;
 
-	ret = ipu_bridge_init(dev, ipu_bridge_parse_ssdb);
-	if (ret) {
-		dev_err_probe(dev, ret, "IPU4P bridge init failed\n");
-		return ERR_PTR(ret);
+	/* Linux 6.8 bridge nodes survive controller-driver removal. */
+	endpoint = fwnode_graph_get_next_endpoint(dev_fwnode(dev), NULL);
+	if (endpoint) {
+		fwnode_handle_put(endpoint);
+	} else {
+		ret = ipu_bridge_init(dev, ipu_bridge_parse_ssdb);
+		if (ret) {
+			dev_err_probe(dev, ret, "IPU4P bridge init failed\n");
+			return ERR_PTR(ret);
+		}
 	}
 
 	pdata = kzalloc(sizeof(*pdata), GFP_KERNEL);
@@ -509,10 +516,10 @@ static int ipu4p_pci_probe(struct pci_dev *pdev, const struct pci_device_id *id)
 	phys = pci_resource_start(pdev, IPU4P_PCI_BAR);
 	dev_dbg(dev, "IPU4P PCI bar[%u] = %pa\n", IPU4P_PCI_BAR, &phys);
 
-	isp->base = pcim_iomap_region(pdev, IPU4P_PCI_BAR, IPU4P_NAME);
-	if (IS_ERR(isp->base))
-		return dev_err_probe(dev, PTR_ERR(isp->base),
-				     "Failed to I/O mem remapping\n");
+	ret = pcim_iomap_regions(pdev, BIT(IPU4P_PCI_BAR), IPU4P_NAME);
+	if (ret)
+		return dev_err_probe(dev, ret, "Failed to map PCI BAR\n");
+	isp->base = pcim_iomap_table(pdev)[IPU4P_PCI_BAR];
 
 	pci_set_drvdata(pdev, isp);
 	pci_set_master(pdev);
@@ -801,7 +808,7 @@ static struct pci_driver ipu4p_pci_driver = {
 
 module_pci_driver(ipu4p_pci_driver);
 
-MODULE_IMPORT_NS("INTEL_IPU_BRIDGE");
+MODULE_IMPORT_NS(INTEL_IPU_BRIDGE);
 MODULE_AUTHOR("Sakari Ailus <sakari.ailus@linux.intel.com>");
 MODULE_AUTHOR("Tianshu Qiu <tian.shu.qiu@intel.com>");
 MODULE_AUTHOR("Bingbu Cao <bingbu.cao@intel.com>");

@@ -571,7 +571,7 @@ int ipu4p_mmu_hw_init(struct ipu4p_mmu *mmu)
 
 	return 0;
 }
-EXPORT_SYMBOL_NS_GPL(ipu4p_mmu_hw_init, "INTEL_IPU4P");
+EXPORT_SYMBOL_NS_GPL(ipu4p_mmu_hw_init, INTEL_IPU4P);
 
 static struct ipu4p_mmu_info *ipu4p_mmu_alloc(struct ipu4p_device *isp)
 {
@@ -636,7 +636,7 @@ void ipu4p_mmu_hw_cleanup(struct ipu4p_mmu *mmu)
 	mmu->ready = false;
 	spin_unlock_irqrestore(&mmu->ready_lock, flags);
 }
-EXPORT_SYMBOL_NS_GPL(ipu4p_mmu_hw_cleanup, "INTEL_IPU4P");
+EXPORT_SYMBOL_NS_GPL(ipu4p_mmu_hw_cleanup, INTEL_IPU4P);
 
 static struct ipu4p_dma_mapping *alloc_dma_mapping(struct ipu4p_device *isp)
 {

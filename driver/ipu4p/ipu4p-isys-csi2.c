@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: GPL-2.0-only
+#include <linux/version.h>
 /*
  * Copyright (C) 2013--2024 Intel Corporation
  */
@@ -52,8 +53,8 @@ MODULE_PARM_DESC(dtermen_ovr, "Override data lane termen count (bring-up)");
 /*
  * Bring-up TPG: use the isys MIPI packet generator as the frame
  * source instead of the sensor. -1 = off, 0 = mipigen0 (s0 cluster),
- * 1 = mipigen1 (s1 cluster). Proves the fw/isys/dma path without
- * a working PHY.
+ * 1 = mipigen1 (s1 cluster). Valid generated pixels, not just completed
+ * buffers, are needed to verify the fw/isys/dma path without a working PHY.
  */
 static int tpg_mode = -1;
 module_param(tpg_mode, int, 0444);
@@ -91,7 +92,7 @@ MODULE_PARM_DESC(tpg_keep_port_source,
 #define MIPI_GEN_REG_TPG_VCNT_DELTA	0x5c
 
 static void csi2_tpg_stream(struct ipu4p_isys *isys, u32 width, u32 height,
-			    u32 bpp, int enable)
+			    u32 bpp, u32 dt, int enable)
 {
 	void __iomem *isys_base = isys->pdata->base;
 	void __iomem *base = isys_base +
@@ -108,7 +109,7 @@ static void csi2_tpg_stream(struct ipu4p_isys *isys, u32 width, u32 height,
 	}
 
 	writel((bpp - 8) / 2, base + MIPI_GEN_REG_COM_DTYPE);
-	writel(0x2b, base + MIPI_GEN_REG_COM_VTYPE);	/* RAW10 */
+	writel(dt, base + MIPI_GEN_REG_COM_VTYPE);
 	writel(0, base + MIPI_GEN_REG_COM_VCHAN);
 	writel(0, base + MIPI_GEN_REG_SYNG_NOF_FRAMES);
 
@@ -366,11 +367,13 @@ static const u32 csi2_supported_codes[] = {
 	MEDIA_BUS_FMT_SGBRG8_1X8,
 	MEDIA_BUS_FMT_SGRBG8_1X8,
 	MEDIA_BUS_FMT_SRGGB8_1X8,
+#ifdef MEDIA_BUS_FMT_META_8
 	MEDIA_BUS_FMT_META_8,
 	MEDIA_BUS_FMT_META_10,
 	MEDIA_BUS_FMT_META_12,
 	MEDIA_BUS_FMT_META_16,
 	MEDIA_BUS_FMT_META_24,
+#endif
 	0
 };
 
@@ -414,7 +417,12 @@ s64 ipu4p_isys_csi2_get_link_freq(struct ipu4p_isys_csi2 *csi2)
 		return PTR_ERR(src_pad);
 	}
 
+#if LINUX_VERSION_CODE < KERNEL_VERSION(6, 10, 0)
+	return v4l2_get_link_freq(
+		media_entity_to_v4l2_subdev(src_pad->entity)->ctrl_handler, 0, 0);
+#else
 	return v4l2_get_link_freq(src_pad, 0, 0);
+#endif
 }
 
 static int csi2_subscribe_event(struct v4l2_subdev *sd, struct v4l2_fh *fh,
@@ -556,9 +564,29 @@ void ipu4p_isys_csi2_error(struct ipu4p_isys_csi2 *csi2)
 			dev_dbg(dev, "csi2-%i info: %s\n",
 				csi2->port, errors[i].error_string);
 		else
-			dev_dbg(dev, "csi2-%i error: %s\n",
+			dev_err_ratelimited(dev, "csi2-%i error: %s\n",
 					    csi2->port, errors[i].error_string);
 	}
+}
+
+void ipu4p_isys_csi2_prepare_front(struct ipu4p_isys_csi2 *csi2)
+{
+	struct ipu4p_isys *isys = csi2->isys;
+	void __iomem *base = isys->pdata->base;
+	u32 gpreg = IPU4P_COMBO_GPOFFSET;
+	u32 cfg;
+
+	if (!isys->surface_phy || csi2->port != 2 || csi2->nlanes != 2)
+		return;
+
+	/* Reset before firmware configures the receiver's stream-to-memory path. */
+	cfg = readl(base + gpreg + 0x14);
+	writel(0x40 << 1, base + gpreg);
+	readl(base + gpreg);
+	usleep_range(100, 200);
+	writel(0, base + gpreg);
+	writel(cfg, base + gpreg + 0x14);
+	ipu4p_isys_reapply_front_phy(isys);
 }
 
 static int ipu4p_isys_csi2_set_stream(struct v4l2_subdev *sd,
@@ -571,6 +599,7 @@ static int ipu4p_isys_csi2_set_stream(struct v4l2_subdev *sd,
 	struct device *dev = &isys->adev->auxdev.dev;
 	void __iomem *isys_base = isys->pdata->base;
 	u32 csi2part = 0;
+	u32 dly_shift = 0;
 	int ret = 0;
 	u32 val;
 	u32 i;
@@ -580,7 +609,7 @@ static int ipu4p_isys_csi2_set_stream(struct v4l2_subdev *sd,
 
 	if (!enable) {
 		if (tpg_mode >= 0)
-			csi2_tpg_stream(isys, 0, 0, 10, 0);
+			csi2_tpg_stream(isys, 0, 0, 0, 0, 0);
 		if (csi_sniff)
 			csi2_sniff_disarm(isys, csi2->port);
 
@@ -617,21 +646,26 @@ static int ipu4p_isys_csi2_set_stream(struct v4l2_subdev *sd,
 		return 0;
 	}
 
+	if (isys->surface_phy && csi2->port == 2 && nlanes == 2)
+		dly_shift = CSI2_REG_CSI_RX_DLY_CNT_NARROW_SHIFT;
+
 	/* arm the lane state trackers (cio2 heritage) */
 	writel(0xff, csi2->base + CSI2_REG_CSI_RX_STATUS_DLANE_HS);
 	writel(0xffffff, csi2->base + CSI2_REG_CSI_RX_STATUS_DLANE_LP);
 
 	/* D-PHY timing: clock lane, then each enabled data lane */
 	writel(timing->ctermen,
-	       csi2->base + CSI2_REG_CSI_RX_DLY_CNT_TERMEN_CLANE);
+	       csi2->base + CSI2_REG_CSI_RX_DLY_CNT_TERMEN_CLANE + dly_shift);
 	writel(timing->csettle,
-	       csi2->base + CSI2_REG_CSI_RX_DLY_CNT_SETTLE_CLANE);
+	       csi2->base + CSI2_REG_CSI_RX_DLY_CNT_SETTLE_CLANE + dly_shift);
 
 	for (i = 0; i < nlanes; i++) {
 		writel(timing->dtermen,
-		       csi2->base + CSI2_REG_CSI_RX_DLY_CNT_TERMEN_DLANE(i));
+		       csi2->base + CSI2_REG_CSI_RX_DLY_CNT_TERMEN_DLANE(i) +
+		       dly_shift);
 		writel(timing->dsettle,
-		       csi2->base + CSI2_REG_CSI_RX_DLY_CNT_SETTLE_DLANE(i));
+		       csi2->base + CSI2_REG_CSI_RX_DLY_CNT_SETTLE_DLANE(i) +
+		       dly_shift);
 	}
 
 	val = readl(csi2->base + CSI2_REG_CSI_RX_CONFIG);
@@ -677,9 +711,6 @@ static int ipu4p_isys_csi2_set_stream(struct v4l2_subdev *sd,
 		schedule_delayed_work(&sniff_work, msecs_to_jiffies(600));
 	}
 
-	if (tpg_mode >= 0)
-		csi2_tpg_stream(isys, 1280, 800, 10, 1);
-
 	return ret;
 }
 
@@ -690,9 +721,11 @@ static int ipu4p_isys_csi2_enable_streams(struct v4l2_subdev *sd,
 	struct ipu4p_isys_subdev *asd = to_ipu4p_isys_subdev(sd);
 	struct ipu4p_isys_csi2 *csi2 = to_ipu4p_isys_csi2(asd);
 	struct ipu4p_isys_csi2_timing timing = { };
+	struct v4l2_mbus_framefmt *fmt = NULL;
 	struct v4l2_subdev *remote_sd;
 	struct media_pad *remote_pad;
 	u64 sink_streams;
+	u32 bpp = 0;
 	int ret;
 
 	remote_pad = media_pad_remote_pad_first(&sd->entity.pads[CSI2_PAD_SINK]);
@@ -702,6 +735,19 @@ static int ipu4p_isys_csi2_enable_streams(struct v4l2_subdev *sd,
 		v4l2_subdev_state_xlate_streams(state, pad, CSI2_PAD_SINK,
 						&streams_mask);
 
+	if (tpg_mode >= 0) {
+		if (sink_streams)
+			fmt = v4l2_subdev_state_get_format(state, CSI2_PAD_SINK,
+							 __ffs64(sink_streams));
+		if (fmt)
+			bpp = ipu4p_isys_mbus_code_to_bpp(fmt->code);
+		if (!fmt || (bpp != 8 && bpp != 10 && bpp != 12)) {
+			dev_err(&csi2->isys->adev->auxdev.dev,
+				"Test generator requires a routed RAW8/10/12 format\n");
+			return -EINVAL;
+		}
+	}
+
 	ret = ipu4p_isys_csi2_calc_timing(csi2, &timing, CSI2_ACCINV);
 	if (ret)
 		return ret;
@@ -710,14 +756,19 @@ static int ipu4p_isys_csi2_enable_streams(struct v4l2_subdev *sd,
 	if (ret)
 		return ret;
 
+	if (tpg_mode >= 0) {
+		csi2_tpg_stream(csi2->isys, fmt->width, fmt->height, bpp,
+			       ipu4p_isys_mbus_code_to_mipi(fmt->code), 1);
+		return 0;
+	}
+
 	ret = v4l2_subdev_enable_streams(remote_sd, remote_pad->index,
 					 sink_streams);
 	if (ret) {
 		ipu4p_isys_csi2_set_stream(sd, NULL, 0, false);
-		return ret;
 	}
 
-	return 0;
+	return ret;
 }
 
 static int ipu4p_isys_csi2_disable_streams(struct v4l2_subdev *sd,
@@ -737,7 +788,8 @@ static int ipu4p_isys_csi2_disable_streams(struct v4l2_subdev *sd,
 
 	ipu4p_isys_csi2_set_stream(sd, NULL, 0, false);
 
-	v4l2_subdev_disable_streams(remote_sd, remote_pad->index, sink_streams);
+	if (tpg_mode < 0)
+		v4l2_subdev_disable_streams(remote_sd, remote_pad->index, sink_streams);
 
 	return 0;
 }
@@ -870,6 +922,11 @@ int ipu4p_isys_csi2_init(struct ipu4p_isys_csi2 *csi2,
 {
 	struct device *dev = &isys->adev->auxdev.dev;
 	int ret;
+
+	if (tpg_mode < -1 || tpg_mode > 1) {
+		dev_err(dev, "Test generator index must be -1, 0 or 1\n");
+		return -EINVAL;
+	}
 
 	csi2->isys = isys;
 	csi2->base = base;

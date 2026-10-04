@@ -277,8 +277,6 @@ fail:
 #define IPU4P_REG_ISYS_ISA_ACC_IRQ_CTRL_BASE	0xb0c00
 #define IPU4P_REG_ISYS_A_IRQ_CTRL_BASE		0xbe200
 /* IPU4P values from the CONFIG_VIDEO_INTEL_IPU4P section of the 4.19 tree */
-#define IPU4P_GPOFFSET				0x66800
-#define IPU4P_COMBO_GPOFFSET			0x6e800
 #define CSI2_REG_CL0_IBUFCTL_EN_FLUSH_FOR_IDRAIN	0x6002c
 #define CSI2_REG_CL1_IBUFCTL_EN_FLUSH_FOR_IDRAIN	0x6802c
 #define IPU4P_REG_ISYS_IBUFCTL_EN_FLUSH_FOR_IDRAIN	0xb602c
@@ -324,6 +322,37 @@ static unsigned int phy_crc = 13;
 module_param(phy_crc, uint, 0444);
 MODULE_PARM_DESC(phy_crc, "Combo PHY CPHY DLL crcdc code (Windows: 13 low rate, 8 high rate)");
 
+static bool surface_phy;
+module_param(surface_phy, bool, 0444);
+MODULE_PARM_DESC(surface_phy, "Use Surface front OV5693 PHY settings");
+
+void ipu4p_isys_reapply_front_phy(struct ipu4p_isys *isys)
+{
+	void __iomem *base = isys->adev->isp->base;
+	unsigned int bb = 10;
+	u32 val;
+
+	val = readl(base + BUTTRESS_REG_CPHYX_DLL_OVRD(bb));
+	val = (val & ~0x7e) | (phy_crc << 1) | BIT(0);
+	writel(val, base + BUTTRESS_REG_CPHYX_DLL_OVRD(bb));
+	val = readl(base + BUTTRESS_REG_DPHYX_DLL_OVRD(bb));
+	val = (val & ~0x7e) | (phy_drc << 1) | BIT(0);
+	writel(val, base + BUTTRESS_REG_DPHYX_DLL_OVRD(bb));
+	val = 0x15 | (2U << 29);
+	writel(val, base + BUTTRESS_REG_BBX_AFE_CONFIG(bb));
+	val = readl(base + BUTTRESS_REG_CPHYX_RX_CONTROL1(bb));
+	writel(val | BIT(31), base + BUTTRESS_REG_CPHYX_RX_CONTROL1(bb));
+	val = readl(base + BUTTRESS_REG_DPHYX_DLL_OVRD(bb) - 4);
+	writel(val | BIT(25) | BIT(26),
+	       base + BUTTRESS_REG_DPHYX_DLL_OVRD(bb) - 4);
+	val = readl(base + BUTTRESS_REG_CPHYX_DLL_OVRD(bb));
+	writel(val & ~BIT(0), base + BUTTRESS_REG_CPHYX_DLL_OVRD(bb));
+	writel(val | BIT(0), base + BUTTRESS_REG_CPHYX_DLL_OVRD(bb));
+	val = readl(base + BUTTRESS_REG_DPHYX_DLL_OVRD(bb));
+	writel(val & ~BIT(0), base + BUTTRESS_REG_DPHYX_DLL_OVRD(bb));
+	writel(val | BIT(0), base + BUTTRESS_REG_DPHYX_DLL_OVRD(bb));
+}
+
 static void ipu4p_isys_bb_cfg(struct ipu4p_isys *isys)
 {
 	void __iomem *isp_base = isys->adev->isp->base;
@@ -356,6 +385,12 @@ static void ipu4p_isys_bb_cfg(struct ipu4p_isys *isys)
 		unsigned int afe = bbconfig[i][3];
 		unsigned int eq = phy_eq & 0x3f;
 
+		if (surface_phy && bb == 8)
+			continue;
+		if (surface_phy && bb == 10) {
+			ipu4p_isys_reapply_front_phy(isys);
+			continue;
+		}
 		val = readl(isp_base + BUTTRESS_REG_CPHYX_DLL_OVRD(bb));
 		val &= ~0x7e;
 		val |= crc << 1;
@@ -366,9 +401,13 @@ static void ipu4p_isys_bb_cfg(struct ipu4p_isys *isys)
 		val |= 1;
 		val |= drc << 1;
 		writel(val, isp_base + BUTTRESS_REG_DPHYX_DLL_OVRD(bb));
-		val = ((((eq | 0x80) << 6 | eq) << 6) | eq) << 11 |
-			(afe & 0x7ff);
+		if (surface_phy)
+			val = afe | (2U << 29);
+		else
+			val = ((((eq | 0x80) << 6 | eq) << 6) | eq) << 11 |
+				(afe & 0x7ff);
 		writel(val, isp_base + BUTTRESS_REG_BBX_AFE_CONFIG(bb));
+
 	}
 }
 
@@ -417,10 +456,12 @@ static void ipu4p_isys_port_cfg(struct ipu4p_isys *isys)
 	def1 = readl(base + IPU4P_COMBO_GPOFFSET + 0x14);
 
 	/* Receiver clock config before the port config */
-	writel(hpll_freq, base + IPU4P_GPOFFSET + 0x08);
-	writel(isclk_ratio, base + IPU4P_GPOFFSET + 0x0c);
-	writel(hpll_freq, base + IPU4P_COMBO_GPOFFSET + 0x08);
-	writel(isclk_ratio, base + IPU4P_COMBO_GPOFFSET + 0x0c);
+	if (!surface_phy) {
+		writel(hpll_freq, base + IPU4P_GPOFFSET + 0x08);
+		writel(isclk_ratio, base + IPU4P_GPOFFSET + 0x0c);
+		writel(hpll_freq, base + IPU4P_COMBO_GPOFFSET + 0x08);
+		writel(isclk_ratio, base + IPU4P_COMBO_GPOFFSET + 0x0c);
+	}
 
 	/* Port config */
 	writel(combo_port_cfg, base + IPU4P_GPOFFSET + 0x14);
@@ -434,7 +475,7 @@ static void ipu4p_isys_port_cfg(struct ipu4p_isys *isys)
 	 * Without the request the CSI2 feature blocks tick on a ~38 kHz
 	 * backup clock: TPG counters crawl and receivers never sample.
 	 */
-	if (sensor_freq_ctl) {
+	if (!surface_phy && sensor_freq_ctl) {
 		writel(sensor_freq_ctl, isp_base + 0x16c);
 		dev_dbg(dev, "sensor_freq_ctl: wrote %08x, readback %08x\n",
 			 sensor_freq_ctl, readl(isp_base + 0x16c));
@@ -444,7 +485,7 @@ static void ipu4p_isys_port_cfg(struct ipu4p_isys *isys)
 		def0, readl(base + IPU4P_GPOFFSET + 0x14),
 		def1, readl(base + IPU4P_COMBO_GPOFFSET + 0x14));
 
-	if (srst_toggle) {
+	if (!surface_phy && srst_toggle) {
 		writel(1, base + IPU4P_GPOFFSET + 0x00);
 		writel(1, base + IPU4P_GPOFFSET + 0x04);
 		writel(1, base + IPU4P_COMBO_GPOFFSET + 0x00);
@@ -1285,6 +1326,7 @@ static int isys_probe(struct auxiliary_device *auxdev,
 		(const struct ipu4p_auxdrv_data *)auxdev_id->driver_data;
 	adev->auxdrv = to_auxiliary_drv(auxdev->dev.driver);
 	isys->adev = adev;
+	isys->surface_phy = surface_phy;
 	isys->pdata = adev->pdata;
 	csi2_pdata = &isys->pdata->ipdata->csi2;
 
@@ -1469,8 +1511,9 @@ static int isys_isr_one(struct ipu4p_bus_device *adev)
 			"FW error resp SUSPENSION, details %d\n",
 			resp->error_info.error_details);
 	else if (resp->error_info.error)
-		dev_dbg(&adev->auxdev.dev,
-			"FW error resp error %d, details %d\n",
+		dev_err_ratelimited(&adev->auxdev.dev,
+			"FW %s stream %u error %d, details %d\n",
+			fw_msg[index].msg, resp->stream_handle,
 			resp->error_info.error, resp->error_info.error_details);
 
 	if (resp->stream_handle >= IPU4P_ISYS_MAX_STREAMS) {
@@ -1609,5 +1652,5 @@ MODULE_AUTHOR("Yunliang Ding <yunliang.ding@intel.com>");
 MODULE_AUTHOR("Hongju Wang <hongju.wang@intel.com>");
 MODULE_LICENSE("GPL");
 MODULE_DESCRIPTION("Intel IPU4P input system driver");
-MODULE_IMPORT_NS("INTEL_IPU4P");
-MODULE_IMPORT_NS("INTEL_IPU_BRIDGE");
+MODULE_IMPORT_NS(INTEL_IPU4P);
+MODULE_IMPORT_NS(INTEL_IPU_BRIDGE);

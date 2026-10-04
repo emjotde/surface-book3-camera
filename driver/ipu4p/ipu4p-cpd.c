@@ -216,14 +216,14 @@ int ipu4p_cpd_create_pkg_dir(struct ipu4p_bus_device *adev, const void *src)
 
 	return 0;
 }
-EXPORT_SYMBOL_NS_GPL(ipu4p_cpd_create_pkg_dir, "INTEL_IPU4P");
+EXPORT_SYMBOL_NS_GPL(ipu4p_cpd_create_pkg_dir, INTEL_IPU4P);
 
 void ipu4p_cpd_free_pkg_dir(struct ipu4p_bus_device *adev)
 {
 	ipu4p_dma_free(adev, adev->pkg_dir_size, adev->pkg_dir,
 		      adev->pkg_dir_dma_addr, 0);
 }
-EXPORT_SYMBOL_NS_GPL(ipu4p_cpd_free_pkg_dir, "INTEL_IPU4P");
+EXPORT_SYMBOL_NS_GPL(ipu4p_cpd_free_pkg_dir, INTEL_IPU4P);
 
 static int ipu4p_cpd_validate_cpd(struct ipu4p_device *isp, const void *cpd,
 				 unsigned long cpd_size,

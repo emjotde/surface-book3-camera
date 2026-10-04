@@ -9,6 +9,9 @@
 
 #include <linux/bits.h>
 
+#define IPU4P_GPOFFSET				0x66800
+#define IPU4P_COMBO_GPOFFSET			0x6e800
+
 /*
  * Per-port csi2 rx register base, relative to the ISYS base.
  * Available ports: s0p3 (port 0), s1p0..s1p3 (ports 1..4).
@@ -42,6 +45,7 @@
 /* 0..3 */
 #define CSI2_REG_CSI_RX_DLY_CNT_TERMEN_DLANE(n)		(0x34 + (n) * 8)
 #define CSI2_REG_CSI_RX_DLY_CNT_SETTLE_DLANE(n)		(0x38 + (n) * 8)
+#define CSI2_REG_CSI_RX_DLY_CNT_NARROW_SHIFT		4
 
 /* rx error bits in the per-port irq ctrl0 block (low 16 bits) */
 #define CSI2_CSIRX_HEADER_SINGLE_ERROR_CORRECTED	BIT(0)
