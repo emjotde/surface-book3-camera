@@ -9,6 +9,9 @@ local signing, kernel updates and rollback, and
 [GNOME Camera patches](patches/gnome-snapshot/README.md) for reproducible
 application builds. Firmware, signing keys, private captures and build
 artifacts are deliberately excluded.
+The [Ubuntu build definition](ci/README.md) is preserved but GitHub Actions is
+intentionally inactive; publishing the source does not require granting
+additional workflow permissions.
 
 ## Local Surface Book 3 experiment
 
